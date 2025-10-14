@@ -22,6 +22,8 @@ class YOLOv11Backbone(nn.Module):
             恰好可以输出(128, 256, 512)通道数 (虽然有adapter也无所谓)
         """
         super().__init__()
+
+        self.out_indices = [4, 6, 10]  # P3, P4, P5
         
         # 如果提供了预训练模型路径，直接加载
         if yolo_model_path:
@@ -33,9 +35,9 @@ class YOLOv11Backbone(nn.Module):
             
             # 获取输出通道数 (C3k2 和 C2PSA 都有 cv2 属性)
             self.out_channels = [
-                yolo_model.model[3].conv.out_channels,   # P3 (C3k2)
-                yolo_model.model[6].cv2.conv.out_channels,   # P4 (C3k2)
-                yolo_model.model[10].cv2.conv.out_channels,  # P5 (C2PSA)
+                yolo_model.model[self.out_indices[0]].conv.out_channels,   # P3 (C3k2)
+                yolo_model.model[self.out_indices[1]].conv.out_channels,   # P4 (C3k2)
+                yolo_model.model[self.out_indices[2]].conv.out_channels,  # P5 (C2PSA)
             ]
         else:
             # 如果没有预训练模型，使用 ultralytics 的模块构建
@@ -68,9 +70,16 @@ class YOLOv11Backbone(nn.Module):
                 SPPF(c5, c5, k=5),  # 9
                 C2PSA(c5, c5, n=n1),  # 10
             ])
-            self.out_channels = [c3, c4, c5]  # 输出通道数
-        
-        self.out_indices = [3, 6, 10]  # P3, P4, P5
+            self.out_channels = []
+            for i in self.out_indices:
+                layer = self.layers[i]
+                #（Conv)
+                if hasattr(layer, 'conv'):
+                    self.out_channels.append(layer.conv.out_channels)
+                elif hasattr(layer, 'cv2'):  # (C3k2)
+                    self.out_channels.append(layer.cv2.conv.out_channels)
+                else:
+                    raise AttributeError(f"Layer {i} 没有 conv 或 cv2 属性，请检查模块结构")
     
     def forward(self, x):
         outputs = []

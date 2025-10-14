@@ -256,7 +256,7 @@ def main():
     print("="*80)
     
     # 创建模型 - 使用 nano 版本
-    yolo_scale = 's'  # 可以改为 'n', 's', 'm', 'l', 'x'
+    yolo_scale = 'n'  # 可以改为 'n', 's', 'm', 'l', 'x'
     # yolov11_weights = ''  # f'weights/yolo11{yolo_scale}.pt'
     yolov11_weights = f'weights/yolo11{yolo_scale}.pt'
     
