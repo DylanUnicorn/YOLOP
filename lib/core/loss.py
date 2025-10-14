@@ -165,7 +165,19 @@ class MultiHeadLoss(nn.Module):
         loss = lbox + lobj + lcls + lseg_da + lseg_ll + liou_ll
         # loss = lseg
         # return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
-        return loss, (lbox.item(), lobj.item(), lcls.item(), lseg_da.item(), lseg_ll.item(), liou_ll.item(), loss.item())
+        
+        # 返回详细的损失字典，方便tensorboard记录
+        loss_dict = {
+            'box_loss': lbox.item(),
+            'obj_loss': lobj.item(),
+            'cls_loss': lcls.item(),
+            'da_seg_loss': lseg_da.item(),
+            'll_seg_loss': lseg_ll.item(),
+            'll_iou_loss': liou_ll.item(),
+            'total_loss': loss.item()
+        }
+        
+        return loss, loss_dict
 
 
 def get_loss(cfg, device):
