@@ -4,6 +4,9 @@ import math
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
+import matplotlib
+matplotlib.use('Agg')  # 必须在 import matplotlib.pyplot 之前，禁用交互式
+
 import pprint
 import time
 import torch
@@ -22,6 +25,7 @@ from tensorboardX import SummaryWriter
 
 import lib.dataset as dataset
 from lib.config import cfg
+from lib.config.yolov11 import cfg
 from lib.config import update_config
 from lib.core.loss import get_loss
 from lib.core.function import train
@@ -118,7 +122,19 @@ def main():
         dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
     
     print("load model to device")
-    model = get_net(cfg).to(device)
+    # 支持 YOLOv11 backbone
+    if hasattr(cfg.MODEL, 'USE_YOLOV11') and cfg.MODEL.USE_YOLOV11:
+        yolo_scale = cfg.MODEL.YOLOV11_SCALE if hasattr(cfg.MODEL, 'YOLOV11_SCALE') else 'n'
+        yolo_weights = cfg.MODEL.YOLOV11_WEIGHTS if hasattr(cfg.MODEL, 'YOLOV11_WEIGHTS') else f'weights/yolo11{yolo_scale}.pt'
+        freeze_backbone = cfg.MODEL.FREEZE_BACKBONE if hasattr(cfg.MODEL, 'FREEZE_BACKBONE') else False
+        
+        logger.info(f"Building model with YOLOv11{yolo_scale} backbone...")
+        logger.info(f"  Pretrained weights: {yolo_weights}")
+        logger.info(f"  Freeze backbone: {freeze_backbone}")
+        
+        model = get_net(cfg, yolo_scale=yolo_scale, yolo_weights_path=yolo_weights, freeze_backbone=freeze_backbone).to(device)
+    else:
+        model = get_net(cfg).to(device)
     # print("load finished")
     #model = model.to(device)
     # print("finish build model")
