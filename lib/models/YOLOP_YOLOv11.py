@@ -23,7 +23,7 @@ class YOLOv11Backbone(nn.Module):
         """
         super().__init__()
 
-        self.out_indices = [4, 6, 10]  # P3, P4, P5
+        self.out_indices = [3, 6, 10]  # P3, P4, P5
         
         # 如果提供了预训练模型路径，直接加载
         if yolo_model_path:
@@ -36,8 +36,8 @@ class YOLOv11Backbone(nn.Module):
             # 获取输出通道数 (C3k2 和 C2PSA 都有 cv2 属性)
             self.out_channels = [
                 yolo_model.model[self.out_indices[0]].conv.out_channels,   # P3 (C3k2)
-                yolo_model.model[self.out_indices[1]].conv.out_channels,   # P4 (C3k2)
-                yolo_model.model[self.out_indices[2]].conv.out_channels,  # P5 (C2PSA)
+                yolo_model.model[self.out_indices[1]].cv2.conv.out_channels,   # P4 (C3k2)
+                yolo_model.model[self.out_indices[2]].cv2.conv.out_channels,  # P5 (C2PSA)
             ]
         else:
             # 如果没有预训练模型，使用 ultralytics 的模块构建
@@ -139,47 +139,47 @@ class YOLOPWithYOLOv11(nn.Module):
             ChannelAdapter(backbone_channels[1], neck_channels[1]),  # P4
             ChannelAdapter(backbone_channels[2], neck_channels[2]),  # P5
         ])
-        # YOLOP neck (层 11-24)
+        # YOLOP neck (简化版，去掉冗余FPN卷积)
+        # 适配后通道: P3=128, P4=256, P5=512
         self.neck = nn.ModuleList([
-            Conv(512, 256, k=1, s=1),  # 11
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 12
-            Concat(dimension=1),  # 13: Concat [-1, 6]
-            BottleneckCSP(512, 256, n=1, shortcut=False),  # 14
-            Conv(256, 128, k=1, s=1),  # 15
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 16
-            Concat(dimension=1),  # 17: Concat [-1, 4]
-            BottleneckCSP(256, 128, n=1, shortcut=False),  # 18
-            Conv(128, 128, k=3, s=2),  # 19
-            Concat(dimension=1),  # 20: Concat [-1, 14]
-            BottleneckCSP(256, 256, n=1, shortcut=False),  # 21
-            Conv(256, 256, k=3, s=2),  # 22
-            Concat(dimension=1),  # 23: Concat [-1, 10]
-            BottleneckCSP(512, 512, n=1, shortcut=False),  # 24
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 0: P5上采样
+            Concat(dimension=1),  # 1: Concat [P5_up, P4] 
+            BottleneckCSP(512 + 256, 256, n=1, shortcut=False),  # 2: 融合P5+P4 -> 256
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 3: P4上采样
+            Concat(dimension=1),  # 4: Concat [P4_up, P3]
+            BottleneckCSP(256 + 128, 128, n=1, shortcut=False),  # 5: 融合P4+P3 -> 128
+            Conv(128, 128, k=3, s=2),  # 6: P3下采样
+            Concat(dimension=1),  # 7: Concat [P3_down, P4_fpn]
+            BottleneckCSP(128 + 256, 256, n=1, shortcut=False),  # 8: 融合 -> 256
+            Conv(256, 256, k=3, s=2),  # 9: P4下采样
+            Concat(dimension=1),  # 10: Concat [P4_down, P5]
+            BottleneckCSP(256 + 512, 512, n=1, shortcut=False),  # 11: 融合 -> 512
         ])
         # YOLOP heads
         self.detect_head = Detect(1, [[3,9,5,11,4,20], [7,18,6,39,12,31], [19,50,38,81,68,157]], [128, 256, 512])
 
+        # 分割头输入从p3_fpn (128通道)
         self.drivable_seg_head = nn.ModuleList([
-            Conv(256, 128, k=3, s=1),  # 25
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 26
-            BottleneckCSP(128, 64, n=1, shortcut=False),  # 27
-            Conv(64, 32, k=3, s=1),  # 28
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 29
-            Conv(32, 16, k=3, s=1),  # 30
-            BottleneckCSP(16, 8, n=1, shortcut=False),  # 31
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 32
-            Conv(8, num_seg_class, k=3, s=1),  # 33
+            Conv(128, 64, k=3, s=1),  # 0: 128->64
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 1
+            BottleneckCSP(64, 32, n=1, shortcut=False),  # 2
+            Conv(32, 16, k=3, s=1),  # 3
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 4
+            Conv(16, 8, k=3, s=1),  # 5
+            BottleneckCSP(8, 4, n=1, shortcut=False),  # 6
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 7
+            Conv(4, num_seg_class, k=3, s=1),  # 8
         ])
         self.lane_seg_head = nn.ModuleList([
-            Conv(256, 128, k=3, s=1),  # 34
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 35
-            BottleneckCSP(128, 64, n=1, shortcut=False),  # 36
-            Conv(64, 32, k=3, s=1),  # 37
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 38
-            Conv(32, 16, k=3, s=1),  # 39
-            BottleneckCSP(16, 8, n=1, shortcut=False),  # 40
-            nn.Upsample(scale_factor=2, mode='nearest'),  # 41
-            Conv(8, 2, k=3, s=1),  # 42
+            Conv(128, 64, k=3, s=1),  # 0: 128->64
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 1
+            BottleneckCSP(64, 32, n=1, shortcut=False),  # 2
+            Conv(32, 16, k=3, s=1),  # 3
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 4
+            Conv(16, 8, k=3, s=1),  # 5
+            BottleneckCSP(8, 4, n=1, shortcut=False),  # 6
+            nn.Upsample(scale_factor=2, mode='nearest'),  # 7
+            Conv(4, 2, k=3, s=1),  # 8
         ])
 
         # 初始化 Detection Head 的 stride
@@ -210,7 +210,7 @@ class YOLOPWithYOLOv11(nn.Module):
             self.lane_seg_head
         ])
         self.detector_index = 3  # detect_head 在第4个位置
-        self.det_out_idx = 25
+        self.det_out_idx = 22  # 更新检测输出索引 (原来是25，现在简化后是22)
 
         self.gr = 1.0 # giou loss ratio (obj loss ratio is 1-giou)
         
@@ -314,29 +314,40 @@ class YOLOPWithYOLOv11(nn.Module):
     def forward(self, x):
         features = self.backbone(x)  # YOLOv11 输出 [P3, P4, P5]
         features = [adapter(f) for adapter, f in zip(self.adapters, features)]  # 适配到 [128, 256, 512]
-        # Neck 前向传播
-        x = features[-1]  # P5 10
-        x = self.neck[0](x)  # 11
-        x = self.neck[1](x)  # 12
-        x = self.neck[2]([x, features[1]])  # 13
-        x = self.neck[3](x)  # 14
-        x = self.neck[4](x)  # 15
-        x = self.neck[5](x)  # 16
-        p3_fpn = self.neck[6]([x, features[0]])  # 17 (P3, 256 通道)
-        p3 = self.neck[7](p3_fpn)  # 18 (P3, 128 通道)
-        x = self.neck[8](p3)  # 19
-        x = self.neck[9]([x, self.neck[4](features[1])])  # 20
-        p4 = self.neck[10](x)  # 21
-        x = self.neck[11](p4)  # 22
-        x = self.neck[12]([x, self.neck[0](features[2])])  # 23
-        p5 = self.neck[13](x)  # 24
+        
+        # 简化的 Neck 前向传播 (直接使用YOLOv11的FPN输出)
+        p3, p4, p5 = features[0], features[1], features[2]  # [128, 256, 512]通道
+        
+        # P5 -> P4 融合
+        x = self.neck[0](p5)  # 0: P5上采样
+        x = self.neck[1]([x, p4])  # 1: concat [P5_up, P4]
+        p4_fpn = self.neck[2](x)  # 2: 融合后的P4特征 (256通道)
+        
+        # P4 -> P3 融合  
+        x = self.neck[3](p4_fpn)  # 3: P4上采样
+        x = self.neck[4]([x, p3])  # 4: concat [P4_up, P3]
+        p3_fpn = self.neck[5](x)  # 5: 融合后的P3特征 (128通道)
+        
+        # 构建检测用的多尺度特征
+        p3_out = p3_fpn  # 检测用P3 (128通道)
+        
+        x = self.neck[6](p3_fpn)  # 6: P3下采样
+        x = self.neck[7]([x, p4_fpn])  # 7: 与P4_fpn融合  
+        p4_out = self.neck[8](x)  # 8: 检测用P4 (256通道)
+        
+        x = self.neck[9](p4_out)  # 9: P4下采样
+        x = self.neck[10]([x, p5])  # 10: 与P5融合
+        p5_out = self.neck[11](x)  # 11: 检测用P5 (512通道)
+        
         # Heads
-        detect_out = self.detect_head([p3, p4, p5])  # 使用层 17, 20, 23
-        drivable_out = p3_fpn  # 使用层 16
+        detect_out = self.detect_head([p3_out, p4_out, p5_out])  
+        
+        # 分割头使用P3的FPN特征 (128通道，分辨率1/8，与原始设计一致)
+        drivable_out = p3_fpn
         for layer in self.drivable_seg_head:
             drivable_out = layer(drivable_out)
 
-        lane_out = p3_fpn  # 使用层 16
+        lane_out = p3_fpn
         for layer in self.lane_seg_head:
             lane_out = layer(lane_out)
 

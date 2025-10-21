@@ -40,14 +40,14 @@ def parse_args():
                         help='config to use: default or yolov11')
     parser.add_argument('--samples', type=int, default=100,
                         help='number of samples to use for quick test')
-    parser.add_argument('--epochs', type=int, default=10,
+    parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs for quick test')
     parser.add_argument('--batch-size', type=int, default=4,
                         help='batch size for quick test')
     parser.add_argument('--yolo-scale', type=str, default='s',
                         choices=['n', 's', 'm', 'l', 'x'],
                         help='YOLOv11 scale (only used if config=yolov11)')
-    parser.add_argument('--freeze-backbone', action='store_true',
+    parser.add_argument('--freeze-backbone', action='store_true', default=True,
                         help='freeze YOLOv11 backbone')
     parser.add_argument('--workers', type=int, default=0,
                         help='number of data loading workers')
