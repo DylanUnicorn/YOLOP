@@ -146,7 +146,13 @@ def main():
     logger.info(f"Frozen parameters: {total_params - trainable_params:,}")
     
     # 损失函数和优化器
-    criterion = get_loss(cfg, device=device)
+    if hasattr(cfg.MODEL, 'USE_YOLOV11') and cfg.MODEL.USE_YOLOV11:
+        from lib.core.loss_v11 import YOLOv11Loss
+        criterion = YOLOv11Loss(model, device)
+        logger.info("Using YOLOv11Loss (anchor-free detection)")
+    else:
+        criterion = get_loss(cfg, device=device)
+        logger.info("Using original YOLOP loss (anchor-based detection)")
     optimizer = get_optimizer(cfg, model)
     
     # 学习率调度器

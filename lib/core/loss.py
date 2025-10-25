@@ -190,9 +190,15 @@ def get_loss(cfg, device):
     -device: cpu or gpu device
 
     Returns:
-    -loss: (MultiHeadLoss)
+    -loss: (MultiHeadLoss or YOLOv11Loss)
 
     """
+    # 检查是否使用YOLOv11模型
+    if hasattr(cfg.MODEL, 'USE_YOLOV11') and cfg.MODEL.USE_YOLOV11:
+        # 使用YOLOv11损失函数 - 需要传入model，所以返回一个lambda
+        return None  # 将在训练时创建
+    
+    # 原始YOLOP损失
     # class loss criteria
     BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([cfg.LOSS.CLS_POS_WEIGHT])).to(device)
     # object loss criteria

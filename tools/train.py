@@ -141,7 +141,15 @@ def main():
     
 
     # define loss function (criterion) and optimizer
-    criterion = get_loss(cfg, device=device)
+    if hasattr(cfg.MODEL, 'USE_YOLOV11') and cfg.MODEL.USE_YOLOV11:
+        from lib.core.loss_v11 import YOLOv11Loss
+        criterion = YOLOv11Loss(model, device)
+        if rank in [-1, 0]:
+            logger.info("Using YOLOv11Loss (anchor-free detection)")
+    else:
+        criterion = get_loss(cfg, device=device)
+        if rank in [-1, 0]:
+            logger.info("Using original YOLOP loss (anchor-based detection)")
     optimizer = get_optimizer(cfg, model)
 
 
@@ -318,14 +326,20 @@ def main():
         print('load data finished')
     
     if rank in [-1, 0]:
-        if cfg.NEED_AUTOANCHOR:
+        # YOLOv11使用无锚点检测，跳过anchor检查
+        use_yolov11 = hasattr(cfg.MODEL, 'USE_YOLOV11') and cfg.MODEL.USE_YOLOV11
+        
+        if cfg.NEED_AUTOANCHOR and not use_yolov11:
             logger.info("begin check anchors")
             run_anchor(logger,train_dataset, model=model, thr=cfg.TRAIN.ANCHOR_THRESHOLD, imgsz=min(cfg.MODEL.IMAGE_SIZE))
         else:
-            logger.info("anchors loaded successfully")
-            det = model.module.model[model.module.detector_index] if is_parallel(model) \
-                else model.model[model.detector_index]
-            logger.info(str(det.anchors))
+            if use_yolov11:
+                logger.info("YOLOv11 anchor-free detection, skip anchor check")
+            else:
+                logger.info("anchors loaded successfully")
+                det = model.module.model[model.module.detector_index] if is_parallel(model) \
+                    else model.model[model.detector_index]
+                logger.info(str(det.anchors))
 
     # training
     num_warmup = max(round(cfg.TRAIN.WARMUP_EPOCHS * num_batch), 1000)

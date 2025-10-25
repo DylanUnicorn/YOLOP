@@ -3,7 +3,8 @@ import torch.nn as nn
 import math
 from ultralytics import YOLO
 from ultralytics.nn.modules import Conv, Concat
-from lib.models.common import Focus, BottleneckCSP, Detect
+from lib.models.common import Focus, BottleneckCSP
+from lib.models.yolov11_head import DetectV11
 from lib.utils import check_anchor_order
 import logging
 
@@ -156,8 +157,8 @@ class YOLOPWithYOLOv11(nn.Module):
             Concat(dimension=1),  # 10: Concat [P4_down, P5]
             BottleneckCSP(256 + 512, 512, n=1, shortcut=False),  # 11: 融合 -> 512
         ])
-        # YOLOP heads
-        self.detect_head = Detect(1, [[3,9,5,11,4,20], [7,18,6,39,12,31], [19,50,38,81,68,157]], [128, 256, 512])
+        # YOLOP heads - 使用YOLOv11无锚点检测头
+        self.detect_head = DetectV11(nc=1, ch=(128, 256, 512))
 
         # 分割头输入从p3_fpn (128通道)
         self.drivable_seg_head = nn.ModuleList([
@@ -184,19 +185,16 @@ class YOLOPWithYOLOv11(nn.Module):
         ])
 
         # 初始化 Detection Head 的 stride
-        # self.detect_head.stride = torch.tensor([8., 16., 32.])  # P3, P4, P5 的 stride
-        
-        # 初始化时动态计算 stride
         s = 128
         with torch.no_grad():
             dummy = torch.zeros(1, 3, s, s)
-            detect_out, _, _ = self.forward(dummy)
+            detect_out = self.detect_head(self.forward_backbone_neck(dummy))
             self.detect_head.stride = torch.tensor([s / x.shape[-2] for x in detect_out])
-        self.detect_head.anchors /= self.detect_head.stride.view(-1, 1, 1)  # Set the anchors for the corresponding scale
-        check_anchor_order(self.detect_head)
+        
         self.stride = self.detect_head.stride
+        self.detect_head.initialize_biases()
 
-        print(f"Initialized Detect head with strides: {self.detect_head.stride.tolist()}")
+        print(f"Initialized DetectV11 head with strides: {self.detect_head.stride.tolist()}")
         
         # 添加必要的属性以兼容训练代码
         self.nc = 1  # number of classes
@@ -242,14 +240,35 @@ class YOLOPWithYOLOv11(nn.Module):
             param.requires_grad = True
     
     def _initialize_biases(self, cf=None):
-        """初始化检测头的偏置 (参考原始YOLOP实现)"""
-        # https://arxiv.org/abs/1708.02002 section 3.3
-        m = self.detect_head  # Detect() module
-        for mi, s in zip(m.m, m.stride):  # from
-            b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-            b.data[:, 5:] += math.log(0.6 / (m.nc - 0.99)) if cf is None else torch.log(cf / cf.sum())  # cls
-            mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+        """初始化检测头的偏置 - 已在DetectV11中处理"""
+        pass
+    
+    def forward_backbone_neck(self, x):
+        """仅前向backbone和neck，用于初始化stride"""
+        features = self.backbone(x)
+        features = [adapter(f) for adapter, f in zip(self.adapters, features)]
+        
+        p3, p4, p5 = features[0], features[1], features[2]
+        
+        x = self.neck[0](p5)
+        x = self.neck[1]([x, p4])
+        p4_fpn = self.neck[2](x)
+        
+        x = self.neck[3](p4_fpn)
+        x = self.neck[4]([x, p3])
+        p3_fpn = self.neck[5](x)
+        
+        p3_out = p3_fpn
+        
+        x = self.neck[6](p3_fpn)
+        x = self.neck[7]([x, p4_fpn])
+        p4_out = self.neck[8](x)
+        
+        x = self.neck[9](p4_out)
+        x = self.neck[10]([x, p5])
+        p5_out = self.neck[11](x)
+        
+        return [p3_out, p4_out, p5_out]
         
     def load_yolov11_backbone_weights(self, weights_path, freeze_backbone=False):
         """

@@ -249,7 +249,9 @@ def validate(epoch,config, val_loader, val_dataset, model, criterion, output_dir
             t = time_synchronized()
             target[0][:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
             lb = [target[0][target[0][:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
-            output = non_max_suppression(inf_out, conf_thres= config.TEST.NMS_CONF_THRESHOLD, iou_thres=config.TEST.NMS_IOU_THRESHOLD, labels=lb)
+            # 检测是否为YOLOv11无锚点格式
+            anchor_free = hasattr(model, 'detect_head') and hasattr(model.detect_head, 'reg_max')
+            output = non_max_suppression(inf_out, conf_thres= config.TEST.NMS_CONF_THRESHOLD, iou_thres=config.TEST.NMS_IOU_THRESHOLD, labels=lb, anchor_free=anchor_free)
             #output = non_max_suppression(inf_out, conf_thres=0.001, iou_thres=0.6)
             #output = non_max_suppression(inf_out, conf_thres=config.TEST.NMS_CONF_THRES, iou_thres=config.TEST.NMS_IOU_THRES)
             t_nms = time_synchronized() - t

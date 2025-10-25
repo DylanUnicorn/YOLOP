@@ -181,8 +181,12 @@ def check_heads(model):
     print(f"  Type: {type(model.detect_head).__name__}")
     print(f"  Number of classes: {model.detect_head.nc}")
     print(f"  Number of detection layers: {model.detect_head.nl}")
-    print(f"  Number of anchors per layer: {model.detect_head.na}")
-    print(f"  Anchors shape: {model.detect_head.anchors.shape}")
+    if hasattr(model.detect_head, 'na'):
+        print(f"  Number of anchors per layer: {model.detect_head.na}")
+        print(f"  Anchors shape: {model.detect_head.anchors.shape}")
+    else:
+        print("  Anchor-free detection head: no anchors (YOLOv11 style)")
+        print("  Anchors: None (Anchor-free head)")
     print(f"  Strides: {model.detect_head.stride}")
     
     # 可驾驶区域分割头
