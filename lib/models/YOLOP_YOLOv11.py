@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import math
 from ultralytics import YOLO
-from ultralytics.nn.modules import Conv, Concat
-from lib.models.common import Focus, BottleneckCSP
+from ultralytics.nn.modules import Conv, Concat, C2f
+from lib.models.common import Focus
 from lib.models.yolov11_head import DetectV11
 from lib.utils import check_anchor_order
 import logging
@@ -146,40 +146,40 @@ class YOLOPWithYOLOv11(nn.Module):
         self.neck = nn.ModuleList([
             nn.Upsample(scale_factor=2, mode='nearest'),  # 0: P5上采样
             Concat(dimension=1),  # 1: Concat [P5_up, P4] 
-            BottleneckCSP(512 + 256, 256, n=1, shortcut=False),  # 2: 融合P5+P4 -> 256
+            C2f(512 + 256, 256, n=1, shortcut=False),  # 2: 融合P5+P4 -> 256
             nn.Upsample(scale_factor=2, mode='nearest'),  # 3: P4上采样
             Concat(dimension=1),  # 4: Concat [P4_up, P3]
-            BottleneckCSP(256 + 128, 128, n=1, shortcut=False),  # 5: 融合P4+P3 -> 128
+            C2f(256 + 128, 128, n=1, shortcut=False),  # 5: 融合P4+P3 -> 128
             Conv(128, 128, k=3, s=2),  # 6: P3下采样
             Concat(dimension=1),  # 7: Concat [P3_down, P4_fpn]
-            BottleneckCSP(128 + 256, 256, n=1, shortcut=False),  # 8: 融合 -> 256
+            C2f(128 + 256, 256, n=1, shortcut=False),  # 8: 融合 -> 256
             Conv(256, 256, k=3, s=2),  # 9: P4下采样
             Concat(dimension=1),  # 10: Concat [P4_down, P5]
-            BottleneckCSP(256 + 512, 512, n=1, shortcut=False),  # 11: 融合 -> 512
+            C2f(256 + 512, 512, n=1, shortcut=False),  # 11: 融合 -> 512
         ])
         # YOLOP heads - 使用YOLOv11无锚点检测头
         self.detect_head = DetectV11(nc=1, ch=(128, 256, 512))
 
         # 分割头输入从p3_fpn (128通道)
         self.drivable_seg_head = nn.ModuleList([
-            Conv(256, 128, k=3, s=1),  # 0: 128->64
+            Conv(256, 128, k=3, s=1),  # 0: 256->128
             nn.Upsample(scale_factor=2, mode='nearest'),  # 1
-            BottleneckCSP(128, 64, n=1, shortcut=False),  # 2
+            C2f(128, 64, n=1, shortcut=False),  # 2
             Conv(64, 32, k=3, s=1),  # 3
             nn.Upsample(scale_factor=2, mode='nearest'),  # 4
             Conv(32, 16, k=3, s=1),  # 5
-            BottleneckCSP(16, 8, n=1, shortcut=False),  # 6
+            C2f(16, 8, n=1, shortcut=False),  # 6
             nn.Upsample(scale_factor=2, mode='nearest'),  # 7
             Conv(8, num_seg_class, k=3, s=1),  # 8
         ])
         self.lane_seg_head = nn.ModuleList([
-            Conv(256, 128, k=3, s=1),  # 0: 128->64
+            Conv(256, 128, k=3, s=1),  # 0: 256->128
             nn.Upsample(scale_factor=2, mode='nearest'),  # 1
-            BottleneckCSP(128, 64, n=1, shortcut=False),  # 2
+            C2f(128, 64, n=1, shortcut=False),  # 2
             Conv(64, 32, k=3, s=1),  # 3
             nn.Upsample(scale_factor=2, mode='nearest'),  # 4
             Conv(32, 16, k=3, s=1),  # 5
-            BottleneckCSP(16, 8, n=1, shortcut=False),  # 6
+            C2f(16, 8, n=1, shortcut=False),  # 6
             nn.Upsample(scale_factor=2, mode='nearest'),  # 7
             Conv(8, num_seg_class, k=3, s=1),  # 8
         ])
