@@ -202,6 +202,47 @@ class BboxLoss(nn.Module):
         return (left_loss * wl + right_loss * wr).mean(-1, keepdim=True)
 
 
+class VarifocalLoss(nn.Module):
+    """Varifocal Loss (VFL) implementation.
+
+    Targets are IoU-aware scores (for positives) and 0 for negatives.
+    This implementation follows the Varifocal idea used in VFNet: use
+    a BCEWithLogits base loss multiplied by an IoU-aware weight and a
+    focal-like modulating factor for negatives.
+    """
+    def __init__(self, alpha=0.75, gamma=2.0, iou_weighted=True, reduction='none'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.iou_weighted = iou_weighted
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        # pred: logits, target: IoU-aware scores in [0,1]
+        pred_sigmoid = pred.sigmoid()
+        # base BCE loss (per element)
+        loss = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
+
+        # focal-like modulating factor (emphasize hard negatives)
+        # use detached pred_sigmoid to stabilize weighting
+        modulating_factor = (pred_sigmoid.detach() - target).abs().pow(self.gamma)
+
+        if self.iou_weighted:
+            # positives weighted by their IoU (target), negatives weighted by alpha*modulating
+            weight = target + self.alpha * modulating_factor * (target <= 0).float()
+        else:
+            weight = (target > 0).float() + self.alpha * modulating_factor * (target <= 0).float()
+
+        loss = loss * weight
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
+
 class YOLOv11Loss(nn.Module):
     """YOLOv11风格的损失函数"""
     def __init__(self, model, device):
@@ -212,7 +253,8 @@ class YOLOv11Loss(nn.Module):
         self.no = model.detect_head.no
         self.stride = model.detect_head.stride
         
-        self.bce_cls = nn.BCEWithLogitsLoss(reduction='none')
+        # 分类损失：使用 VarifocalLoss 替代简单的 BCE，以利用 IoU-aware target scores
+        self.cls_loss = VarifocalLoss(alpha=0.75, gamma=2.0, iou_weighted=True, reduction='none')
         self.bbox_loss = BboxLoss(self.reg_max - 1)
         self.assigner = TaskAlignedAssigner(nc=self.nc, top_k=10, alpha=0.5, beta=6.0)
         
@@ -318,7 +360,9 @@ class YOLOv11Loss(nn.Module):
         target_scores_sum = max(target_scores.sum(), 1)
         
         # 分类损失
-        loss[1] = self.bce_cls(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
+        # target_scores are IoU-aware soft targets from TaskAlignedAssigner
+        loss_cls = self.cls_loss(pred_scores, target_scores.to(dtype))
+        loss[1] = loss_cls.sum() / target_scores_sum
         
         # Box损失
         if fg_mask.sum():
