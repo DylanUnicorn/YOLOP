@@ -5,6 +5,7 @@ from ultralytics import YOLO
 from ultralytics.nn.modules import Conv, Concat, C2f
 from lib.models.common import Focus
 from lib.models.yolov11_head import DetectV11
+from lib.models.attention import SimAM
 from lib.utils import check_anchor_order
 import logging
 
@@ -159,6 +160,12 @@ class YOLOPWithYOLOv11(nn.Module):
         ])
         # YOLOP heads - 使用YOLOv11无锚点检测头
         self.detect_head = DetectV11(nc=1, ch=(128, 256, 512))
+
+        # 添加SimAM注意力模块，减少检测和分割任务之间的噪声干扰
+        self.attention_p3 = SimAM()  # P3注意力
+        self.attention_p4 = SimAM()  # P4注意力
+        self.attention_p5 = SimAM()  # P5注意力
+        self.attention_seg = SimAM()  # 分割特征注意力
 
         # 分割头输入从p3_fpn (128通道)
         self.drivable_seg_head = nn.ModuleList([
@@ -358,6 +365,12 @@ class YOLOPWithYOLOv11(nn.Module):
         x = self.neck[9](p4_out)  # 9: P4下采样
         x = self.neck[10]([x, p5])  # 10: 与P5融合
         p5_out = self.neck[11](x)  # 11: 检测用P5 (512通道)
+        
+        # 应用SimAM注意力，减少任务间干扰
+        p3_out = self.attention_p3(p3_out)
+        p4_out = self.attention_p4(p4_out)
+        p5_out = self.attention_p5(p5_out)
+        seg_fpn = self.attention_seg(seg_fpn)
         
         # Heads
         detect_out = self.detect_head([p3_out, p4_out, p5_out])  
