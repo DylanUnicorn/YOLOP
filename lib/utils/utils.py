@@ -111,7 +111,7 @@ def save_checkpoint(epoch, name, model, optimizer, output_dir, filename, is_best
         }
     torch.save(checkpoint, os.path.join(output_dir, filename))
     if is_best and 'state_dict' in checkpoint:
-        torch.save(checkpoint['best_state_dict'],
+        torch.save(checkpoint['state_dict'],
                    os.path.join(output_dir, 'model_best.pth'))
 
 

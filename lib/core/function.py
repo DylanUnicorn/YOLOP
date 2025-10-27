@@ -72,16 +72,19 @@ def train(cfg, train_loader, model, criterion, optimizer, scaler, epoch, num_bat
             for tgt in target:
                 assign_target.append(tgt.to(device))
             target = assign_target
-        with amp.autocast(enabled=device.type != 'cpu'):
-            outputs = model(input)
-            total_loss, head_losses = criterion(outputs, target, shapes,model)
+        # with amp.autocast(enabled=device.type != 'cpu'):
+        outputs = model(input)
+        total_loss, head_losses = criterion(outputs, target, shapes,model)
             # print(head_losses)
 
         # compute gradient and do update step
+        # optimizer.zero_grad()
+        # scaler.scale(total_loss).backward()
+        # scaler.step(optimizer)
+        # scaler.update()
         optimizer.zero_grad()
-        scaler.scale(total_loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        total_loss.backward()
+        optimizer.step()
 
         if rank in [-1, 0]:
             # measure accuracy and record loss
@@ -256,8 +259,10 @@ def validate(epoch,config, val_loader, val_dataset, model, criterion, output_dir
 
             if config.TEST.PLOTS:
                 if batch_i == 0:
-                    for i in range(test_batch_size):
-                        img_test = cv2.imread(paths[i])
+                    for i, path in enumerate(paths):
+                        img_test = cv2.imread(str(path))
+                        if img_test is None:
+                            continue
                         da_seg_mask = da_seg_out[i][:, pad_h:height-pad_h, pad_w:width-pad_w].unsqueeze(0)
                         da_seg_mask = torch.nn.functional.interpolate(da_seg_mask, scale_factor=int(1/ratio), mode='bilinear')
                         _, da_seg_mask = torch.max(da_seg_mask, 1)

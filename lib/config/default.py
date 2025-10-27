@@ -1,4 +1,5 @@
 import os
+import platform
 from yacs.config import CfgNode as CN
 
 
@@ -6,7 +7,7 @@ _C = CN()
 
 _C.LOG_DIR = 'runs/'
 _C.GPUS = (0,1)     
-_C.WORKERS = 8
+_C.WORKERS = 0 if platform.system() == 'Windows' else 8
 _C.PIN_MEMORY = False
 _C.PRINT_FREQ = 20
 _C.AUTO_RESUME =False       # Resume from the last training interrupt
@@ -50,10 +51,10 @@ _C.LOSS.LL_IOU_GAIN = 0.2 # lane line iou loss gain
 
 # DATASET related params
 _C.DATASET = CN(new_allowed=True)
-_C.DATASET.DATAROOT = '/home/zwt/bdd/bdd100k/images/100k'       # the path of images folder
-_C.DATASET.LABELROOT = '/home/zwt/bdd/bdd100k/labels/100k'      # the path of det_annotations folder
-_C.DATASET.MASKROOT = '/home/zwt/bdd/bdd_seg_gt'                # the path of da_seg_annotations folder
-_C.DATASET.LANEROOT = '/home/zwt/bdd/bdd_lane_gt'               # the path of ll_seg_annotations folder
+_C.DATASET.DATAROOT = 'E:\Hust\outside_study\YOLOP\dataset\\bdd100k_images_100k\\100k'       # the path of images folder
+_C.DATASET.LABELROOT = 'E:\Hust\outside_study\YOLOP\dataset\det_annotations'      # the path of det_annotations folder label
+_C.DATASET.MASKROOT = 'E:\Hust\outside_study\YOLOP\dataset\da_seg_annotations'                # the path of da_seg_annotations folder mask
+_C.DATASET.LANEROOT = 'E:\Hust\outside_study\YOLOP\dataset\ll_seg_annotations' 
 _C.DATASET.DATASET = 'BddDataset'
 _C.DATASET.TRAIN_SET = 'train'
 _C.DATASET.TEST_SET = 'val'

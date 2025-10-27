@@ -509,6 +509,7 @@ class MCnet(nn.Module):
         self.detector_index = -1
         self.det_out_idx = block_cfg[0][0]
         self.seg_out_idx = block_cfg[0][1:]
+        self.gr = 1.0  # giou loss ratio (obj_loss = 1.0 or giou)
         
 
         # Build model
