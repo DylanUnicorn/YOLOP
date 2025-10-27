@@ -10,3 +10,6 @@ inference/
 *.pt
 *.tar
 *.tar.gz
+
+YOLOv11-pt/
+YOLOv11-pt
