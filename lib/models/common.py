@@ -147,6 +147,37 @@ class C2f(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
+class C3k2(nn.Module):
+    # C3k2 module with variable kernel sizes - used in YOLOv11
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):  # ch_in, ch_out, number, shortcut, groups, expansion, kernel
+        super(C3k2, self).__init__()
+        self.c = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        # Use Bottleneck with different kernel sizes
+        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, k=(k, k), e=1.0) for _ in range(n)])
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+class C3K2(nn.Module):
+    # C3K2 module - alias for consistency with naming conventions
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):
+        super(C3K2, self).__init__()
+        self.c = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, e=1.0) for _ in range(n)])
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
 class SPP(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self, c1, c2, k=(5, 9, 13)):
@@ -159,6 +190,22 @@ class SPP(nn.Module):
     def forward(self, x):
         x = self.cv1(x)
         return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
+
+
+class SPPF(nn.Module):
+    # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 and later
+    def __init__(self, c1, c2, k=5):  # equivalent to SPP(k=(5, 9, 13))
+        super(SPPF, self).__init__()
+        c_ = c1 // 2  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+
+    def forward(self, x):
+        x = self.cv1(x)
+        y1 = self.m(x)
+        y2 = self.m(y1)
+        return self.cv2(torch.cat([x, y1, y2, self.m(y2)], 1))
 
 
 class Focus(nn.Module):
