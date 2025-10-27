@@ -4,6 +4,9 @@ import math
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
+import matplotlib
+matplotlib.use('Agg') # 使用非交互式后端以避免显示问题
+
 import pprint
 import time
 import torch
