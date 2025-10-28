@@ -178,6 +178,63 @@ class C3K2(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
+class PSA(nn.Module):
+    # Position-Sensitive Attention module
+    def __init__(self, c1, c2, e=0.5):
+        super(PSA, self).__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1)
+        self.cv2 = Conv(2 * self.c, c1, 1)
+        
+        # Multi-head attention components
+        self.attn = nn.MultiheadAttention(self.c, num_heads=self.c // 64 if self.c >= 64 else 1, batch_first=True)
+        self.ffn = nn.Sequential(
+            Conv(self.c, self.c * 2, 1),
+            Conv(self.c * 2, self.c, 1, act=False)
+        )
+
+    def forward(self, x):
+        # Split into two paths
+        a, b = self.cv1(x).split((self.c, self.c), dim=1)
+        
+        # Apply attention to path b
+        b_shape = b.shape
+        # Reshape for attention: (B, C, H, W) -> (B, H*W, C)
+        b_flat = b.flatten(2).permute(0, 2, 1)
+        b_attn, _ = self.attn(b_flat, b_flat, b_flat)
+        b_attn = b_attn.permute(0, 2, 1).reshape(b_shape)
+        
+        # FFN
+        b_out = self.ffn(b_attn) + b
+        
+        return self.cv2(torch.cat([a, b_out], 1))
+
+
+class C2PSA(nn.Module):
+    # C2PSA module with Position-Sensitive Attention for YOLOv11
+    def __init__(self, c1, c2, n=1, e=0.5):
+        super(C2PSA, self).__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1)
+        self.cv2 = Conv(2 * self.c, c1, 1)
+        
+        # PSA blocks
+        self.m = nn.ModuleList([PSA(self.c, self.c, e=1.0) for _ in range(n)])
+
+    def forward(self, x):
+        # Split input
+        a, b = self.cv1(x).split((self.c, self.c), 1)
+        
+        # Apply PSA blocks to path b
+        for m in self.m:
+            b = m(b)
+        
+        # Concatenate and fuse
+        return self.cv2(torch.cat([a, b], 1))
+
+
 class SPP(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self, c1, c2, k=(5, 9, 13)):
