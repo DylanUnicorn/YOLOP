@@ -112,6 +112,43 @@ class Bottleneck(nn.Module):
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
+class K2Bottleneck(nn.Module):
+    """K2 bottleneck: parallel convs with two kernel sizes then fuse."""
+    def __init__(self, c1, c2, shortcut=True, g=1, e=1.0, k1=3, k2=5):
+        super().__init__()
+        # hidden channels c1==c2 for usage in C3K2 context where we pass same channels
+        self.add = shortcut and c1 == c2
+        # two parallel conv paths with different kernels (use groups g optionally)
+        self.conv_a = Conv(c1, c2, k=k1, s=1, g=g)  # e.g. 3x3
+        self.conv_b = Conv(c1, c2, k=k2, s=1, g=g)  # e.g. 5x5
+        # fuse 1x1 to reduce back (optional) - here use 1x1 to keep dims consistent
+        self.fuse = Conv(2 * c2, c2, k=1, s=1, act=True)
+
+    def forward(self, x):
+        a = self.conv_a(x)
+        b = self.conv_b(x)
+        out = torch.cat((a, b), dim=1)
+        out = self.fuse(out)
+        return x + out if self.add else out
+
+
+class C3K2(nn.Module):
+    # C3K2 module: split -> K2Bottleneck repeated -> concat -> fuse
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k1=3, k2=5):
+        super(C3K2, self).__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        # use K2Bottleneck with chosen kernels
+        self.m = nn.ModuleList([K2Bottleneck(self.c, self.c, shortcut, g, e=1.0, k1=k1, k2=k2) for _ in range(n)])
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))  # [part_a, part_b]
+        for m in self.m:
+            y.append(m(y[-1]))
+        return self.cv2(torch.cat(y, 1))
+
+
 
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
@@ -146,36 +183,61 @@ class C2f(nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
-
-class C3k2(nn.Module):
-    # C3k2 module with variable kernel sizes - used in YOLOv11
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):  # ch_in, ch_out, number, shortcut, groups, expansion, kernel
-        super(C3k2, self).__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
-        # Use Bottleneck with different kernel sizes
-        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, k=(k, k), e=1.0) for _ in range(n)])
-
-    def forward(self, x):
-        y = list(self.cv1(x).split((self.c, self.c), 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
-
-
-class C3K2(nn.Module):
-    # C3K2 module - alias for consistency with naming conventions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):
-        super(C3K2, self).__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
-        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, e=1.0) for _ in range(n)])
+class PSA(nn.Module):
+    # Position-Sensitive Attention module
+    def __init__(self, c1, c2, e=0.5):
+        super(PSA, self).__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1)
+        self.cv2 = Conv(2 * self.c, c1, 1)
+        
+        # Multi-head attention components
+        self.attn = nn.MultiheadAttention(self.c, num_heads=self.c // 64 if self.c >= 64 else 1, batch_first=True)
+        self.ffn = nn.Sequential(
+            Conv(self.c, self.c * 2, 1),
+            Conv(self.c * 2, self.c, 1, act=False)
+        )
 
     def forward(self, x):
-        y = list(self.cv1(x).split((self.c, self.c), 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+        # Split into two paths
+        a, b = self.cv1(x).split((self.c, self.c), dim=1)
+        
+        # Apply attention to path b
+        b_shape = b.shape
+        # Reshape for attention: (B, C, H, W) -> (B, H*W, C)
+        b_flat = b.flatten(2).permute(0, 2, 1)
+        b_attn, _ = self.attn(b_flat, b_flat, b_flat)
+        b_attn = b_attn.permute(0, 2, 1).reshape(b_shape)
+        
+        # FFN
+        b_out = self.ffn(b_attn) + b
+        
+        return self.cv2(torch.cat([a, b_out], 1))
+
+
+class C2PSA(nn.Module):
+    # C2PSA module with Position-Sensitive Attention for YOLOv11
+    def __init__(self, c1, c2, n=1, e=0.5):
+        super(C2PSA, self).__init__()
+        assert c1 == c2
+        self.c = int(c1 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1)
+        self.cv2 = Conv(2 * self.c, c1, 1)
+        
+        # PSA blocks
+        self.m = nn.ModuleList([PSA(self.c, self.c, e=1.0) for _ in range(n)])
+
+    def forward(self, x):
+        # Split input
+        a, b = self.cv1(x).split((self.c, self.c), 1)
+        
+        # Apply PSA blocks to path b
+        for m in self.m:
+            b = m(b)
+        
+        # Concatenate and fuse
+        return self.cv2(torch.cat([a, b], 1))
 
 
 class SPP(nn.Module):
