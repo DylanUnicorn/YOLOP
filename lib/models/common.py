@@ -112,6 +112,43 @@ class Bottleneck(nn.Module):
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
+class K2Bottleneck(nn.Module):
+    """K2 bottleneck: parallel convs with two kernel sizes then fuse."""
+    def __init__(self, c1, c2, shortcut=True, g=1, e=1.0, k1=3, k2=5):
+        super().__init__()
+        # hidden channels c1==c2 for usage in C3K2 context where we pass same channels
+        self.add = shortcut and c1 == c2
+        # two parallel conv paths with different kernels (use groups g optionally)
+        self.conv_a = Conv(c1, c2, k=k1, s=1, g=g)  # e.g. 3x3
+        self.conv_b = Conv(c1, c2, k=k2, s=1, g=g)  # e.g. 5x5
+        # fuse 1x1 to reduce back (optional) - here use 1x1 to keep dims consistent
+        self.fuse = Conv(2 * c2, c2, k=1, s=1, act=True)
+
+    def forward(self, x):
+        a = self.conv_a(x)
+        b = self.conv_b(x)
+        out = torch.cat((a, b), dim=1)
+        out = self.fuse(out)
+        return x + out if self.add else out
+
+
+class C3K2(nn.Module):
+    # C3K2 module: split -> K2Bottleneck repeated -> concat -> fuse
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k1=3, k2=5):
+        super(C3K2, self).__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        # use K2Bottleneck with chosen kernels
+        self.m = nn.ModuleList([K2Bottleneck(self.c, self.c, shortcut, g, e=1.0, k1=k1, k2=k2) for _ in range(n)])
+
+    def forward(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))  # [part_a, part_b]
+        for m in self.m:
+            y.append(m(y[-1]))
+        return self.cv2(torch.cat(y, 1))
+
+
 
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
@@ -145,38 +182,6 @@ class C2f(nn.Module):
         y = list(self.cv1(x).split((self.c, self.c), 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
-
-
-class C3k2(nn.Module):
-    # C3k2 module with variable kernel sizes - used in YOLOv11
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):  # ch_in, ch_out, number, shortcut, groups, expansion, kernel
-        super(C3k2, self).__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
-        # Use Bottleneck with different kernel sizes
-        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, k=(k, k), e=1.0) for _ in range(n)])
-
-    def forward(self, x):
-        y = list(self.cv1(x).split((self.c, self.c), 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
-
-
-class C3K2(nn.Module):
-    # C3K2 module - alias for consistency with naming conventions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, k=3):
-        super(C3K2, self).__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
-        self.m = nn.ModuleList([Bottleneck(self.c, self.c, shortcut, g, e=1.0) for _ in range(n)])
-
-    def forward(self, x):
-        y = list(self.cv1(x).split((self.c, self.c), 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
-
 
 class PSA(nn.Module):
     # Position-Sensitive Attention module
